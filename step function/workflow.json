@@ -1,0 +1,115 @@
+{
+  "Comment": "A description of my state machine",
+  "StartAt": "Lambda Invoke Ingest Data",
+  "States": {
+    "Lambda Invoke Ingest Data": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Output": "{% $states.result.Payload %}",
+      "Arguments": {
+        "FunctionName": "arn:aws:lambda:us-east-1:554227199359:function:IngestFromOpenAlex:$LATEST",
+        "Payload": {}
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "Glue StartJobRun"
+    },
+    "Glue StartJobRun": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun.sync",
+      "Arguments": {
+        "JobName": "glue-etl-job"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "Lambda LogMetadataFailure"
+        }
+      ],
+      "Next": "Lambda LogMetadataSuccess"
+    },
+    "Lambda LogMetadataSuccess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Output": "{% $states.result.Payload %}",
+      "Arguments": {
+        "FunctionName": "arn:aws:lambda:us-east-1:554227199359:function:InvokeDynamoMetadata:$LATEST",
+        "Payload": {
+          "glue_job_run_id.$": " $.JobRunId",
+          "status": "SUCCESS"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "Athena StartQueryExecution"
+    },
+    "Athena StartQueryExecution": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "End": true,
+      "Arguments": {
+        "QueryString": "SELECT year, COUNT(*) AS total_records,SUM(CAST(value AS DOUBLE)) AS total_value, AVG(CAST(value AS DOUBLE)) AS avg_value FROM cleaned_partitioned GROUP BY year ORDER BY year",
+        "QueryExecutionContext": {
+          "Database": "etl_analytics_db"
+        },
+        "ResultConfiguration": {
+          "OutputLocation": "s3://ade-labjyoti-23012026region-us-east-1/athena-results/summarized-query/"
+        }
+      }
+    },
+    "Lambda LogMetadataFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Output": "{% $states.result.Payload %}",
+      "Arguments": {
+        "FunctionName": "arn:aws:lambda:us-east-1:554227199359:function:InvokeDynamoMetadata:$LATEST",
+        "Payload": {
+          "glue_job_run_id.$": "$.JobRunId",
+          "status": "FAILURE"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "End": true
+    }
+  },
+  "QueryLanguage": "JSONata"
+}
